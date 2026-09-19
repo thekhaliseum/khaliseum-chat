@@ -93,6 +93,17 @@
     var s = getSessions(); s[room] = sess;
     try { localStorage.setItem(LS_SESS, JSON.stringify(s)); } catch (e) {}
   }
+  // Server restarts (free-tier deploys) wipe sessions; if our stored token is
+  // rejected, drop it and show the join gate instead of failing silently.
+  function dropStaleSession() {
+    var s = getSessions();
+    if (!s[state.activeRoom]) return;
+    delete s[state.activeRoom];
+    try { localStorage.setItem(LS_SESS, JSON.stringify(s)); } catch (e) {}
+    state.sessions = s;
+    if (state.ws) { try { state.ws.close(); } catch (e) {} state.ws = null; }
+    render();
+  }
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -275,7 +286,7 @@
     fetch(SERVER + '/api/messages/' + encodeURIComponent(id), {
       method: 'DELETE',
       headers: { Authorization: 'Bearer ' + sess.token },
-    }).catch(function () {});
+    }).then(function (r) { if (r.status === 401) dropStaleSession(); }).catch(function () {});
     // the message_deleted broadcast updates the UI for everyone
   }
 
@@ -288,8 +299,9 @@
       method: 'POST',
       headers: { Authorization: 'Bearer ' + sess.token },
       body: fd,
-    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
       .then(function (res) {
+        if (res.status === 401) { dropStaleSession(); alert('Your chat session expired — rejoin and try the upload again.'); return; }
         if (!res.ok || !res.j.url) { alert(res.j.error || 'Image upload failed.'); return; }
         if (!state.ws || state.ws.readyState !== 1) { alert('Not connected — try again.'); return; }
         state.ws.send(JSON.stringify({ type: 'chat', body: (inputEl.value || '').trim(), imageUrl: res.j.url }));
@@ -301,9 +313,10 @@
   function loadHistory(sess, msgsEl) {
     fetch(SERVER + '/api/rooms/' + state.activeRoom + '/history?limit=50', {
       headers: { Authorization: 'Bearer ' + sess.token },
-    }).then(function (r) { return r.json(); })
-      .then(function (j) {
-        (j.messages || []).forEach(function (m) { addMsg(msgsEl, m); });
+    }).then(function (r) { return r.json().then(function (j) { return { status: r.status, j: j }; }); })
+      .then(function (res) {
+        if (res.status === 401) { dropStaleSession(); return; }
+        (res.j.messages || []).forEach(function (m) { addMsg(msgsEl, m); });
       })
       .catch(function () {});
   }
@@ -337,6 +350,8 @@
         msgsEl.innerHTML = '';
         var g = el('div', 'kx-gate', '<div>⛔ You have been removed from this chat.</div>');
         msgsEl.appendChild(g);
+      } else if (ev.code === 4000) {
+        dropStaleSession(); // session died server-side (e.g. after a deploy)
       }
     };
   }

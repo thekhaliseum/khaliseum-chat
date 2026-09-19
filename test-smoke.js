@@ -166,6 +166,30 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   check('delete missing -> 404', r.status === 404);
 
   wsA.close();
+
+  // 22. stale session recovery: simulate a deploy wipe (free tier restarts
+  // clear the DB, invalidating tokens stored in browsers)
+  const path = require('path');
+  const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
+  const dbWipe = require('better-sqlite3')(path.join(dataDir, 'chat.db'));
+  dbWipe.exec('DELETE FROM users');
+  dbWipe.close();
+  r = await api('GET', '/api/rooms/community/history', null, { Authorization: 'Bearer ' + t1.token });
+  check('stale token history -> 401', r.status === 401);
+  r = await upload(pngBuf, 'pic.png', 'image/png', t1.token);
+  check('stale token upload -> 401', r.status === 401);
+  r = await api('DELETE', '/api/messages/does-not-exist', null, { Authorization: 'Bearer ' + t1.token });
+  check('stale token delete -> 401', r.status === 401);
+  const wsDead = new WebSocket(`ws://localhost:3100/ws?token=${t1.token}&room=community`);
+  const deadCode = await new Promise((res) => {
+    wsDead.on('close', (code) => res(code));
+    setTimeout(() => res('timeout'), 8000);
+  });
+  check('stale token WS -> 4000', deadCode === 4000, String(deadCode));
+  const wjs = require('fs').readFileSync(path.join(__dirname, 'public', 'widget.js'), 'utf8');
+  check('widget recovers from dead session', wjs.includes('dropStaleSession')
+    && /res\.status === 401/.test(wjs) && /ev\.code === 4000/.test(wjs));
+
   console.log('\n--- results ---');
   results.forEach(([s, n, e]) => console.log(s, n, e));
   const fails = results.filter(([s]) => s === 'FAIL').length;
