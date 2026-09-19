@@ -136,7 +136,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   check('image message broadcast', im.imageUrl === imgUrl && im.body === 'look at this');
   const imgMsgId = im.id;
   r = await api('GET', '/api/rooms/community/history', null, { Authorization: 'Bearer ' + t1.token });
-  check('history has imageUrl', r.j.messages.some((x) => x.id === imgMsgId && x.image_url === imgUrl));
+  check('history has imageUrl (widget-compatible name)', r.j.messages.some((x) => x.id === imgMsgId && x.imageUrl === imgUrl));
+  check('history has userId (widget-compatible name)', r.j.messages.some((x) => x.id === imgMsgId && x.userId === t1.userId));
 
   // 19. spoofed imageUrl rejected (not a server upload path)
   const gotSpoof = new Promise((res) => wsA.on('message', (d) => { const p = JSON.parse(d); if (p.type === 'message') res(p); }));

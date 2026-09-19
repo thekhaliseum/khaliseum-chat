@@ -81,19 +81,19 @@ module.exports = {
 
   history: (room, limit = 50, before = null) => {
     if (before) {
-      return db.prepare(`SELECT id, room, user_id, name, body, image_url, created_at FROM messages
+      return db.prepare(`SELECT id, room, user_id AS userId, name, body, image_url AS imageUrl, created_at FROM messages
         WHERE room = ? AND deleted = 0 AND created_at < ? ORDER BY created_at DESC LIMIT ?`).all(room, before, limit).reverse();
     }
-    return db.prepare(`SELECT id, room, user_id, name, body, image_url, created_at FROM messages
+    return db.prepare(`SELECT id, room, user_id AS userId, name, body, image_url AS imageUrl, created_at FROM messages
       WHERE room = ? AND deleted = 0 ORDER BY created_at DESC LIMIT ?`).all(room, limit).reverse();
   },
 
   recentMessages: (limit = 100, room = null) => {
     if (room) {
-      return db.prepare(`SELECT id, room, user_id, name, body, image_url, created_at, deleted FROM messages
+      return db.prepare(`SELECT id, room, user_id AS userId, name, body, image_url AS imageUrl, created_at, deleted FROM messages
         WHERE room = ? ORDER BY created_at DESC LIMIT ?`).all(room, limit).reverse();
     }
-    return db.prepare(`SELECT id, room, user_id, name, body, image_url, created_at, deleted FROM messages
+    return db.prepare(`SELECT id, room, user_id AS userId, name, body, image_url AS imageUrl, created_at, deleted FROM messages
       ORDER BY created_at DESC LIMIT ?`).all(limit).reverse();
   },
 
