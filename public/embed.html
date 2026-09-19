@@ -10,9 +10,11 @@
 </head>
 <body>
   <!-- Full-viewport chat. Embed on your site with:
-       <iframe src="https://YOUR-CHAT-SERVER/embed.html" allow="notifications"
+       <iframe src="https://YOUR-CHAT-SERVER/embed.html"
                style="width:100%;height:600px;border:0;border-radius:12px"></iframe>
-       The allow="notifications" is what lets push opt-in work inside the iframe. -->
+       Push notifications: the "Turn on" button inside the embed opens a
+       top-level enrollment tab (browsers block notification prompts inside
+       cross-origin iframes), so subscribers still get call-back blasts. -->
   <script src="/widget.js" data-mode="embed" data-title="The Khaliseum Chat" async></script>
 </body>
 </html>

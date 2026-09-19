@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Turn on chat notifications — The Khaliseum</title>
+<style>
+  body{background:#0f0f10;color:#eee;font-family:system-ui,-apple-system,sans-serif;margin:0;
+    display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+  .card{max-width:430px;text-align:center;background:#161617;border:1px solid #2a2a2c;border-radius:16px;padding:36px 28px}
+  h1{font-size:20px;margin:0 0 12px} h1 span{color:#e8b33c}
+  p{color:#aaa;font-size:14px;line-height:1.55}
+  button{background:#e8b33c;border:none;border-radius:10px;padding:12px 28px;font-size:15px;
+    font-weight:700;cursor:pointer;color:#111;margin-top:8px}
+  button:disabled{opacity:.5;cursor:default}
+  .status{margin-top:14px;font-size:13px;color:#888;min-height:20px;line-height:1.5}
+  .status.ok{color:#7dd87d}
+  a{color:#e8b33c}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🔔 <span>Khaliseum</span> chat alerts</h1>
+  <p id="desc">Turn on notifications to get call-back alerts and new-message pings from The Khaliseum chat, even when the site is closed.</p>
+  <div id="gate">
+    <button id="go">Enable notifications</button>
+    <div class="status" id="status"></div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var room = new URLSearchParams(location.search).get('room') || 'community';
+  var status = document.getElementById('status');
+  var go = document.getElementById('go');
+  function msg(t, ok) { status.textContent = t; status.className = 'status' + (ok ? ' ok' : ''); }
+  function sessions() { try { return JSON.parse(localStorage.getItem('khaliseum_chat_sessions') || '{}'); } catch (e) { return {}; } }
+  var sess = sessions()[room];
+  if (!sess) {
+    document.getElementById('desc').innerHTML = 'Join the chat first, then come back here to enable notifications. <a href="/embed.html">Open the chat &rarr;</a>';
+    go.style.display = 'none';
+    msg('No chat session found in this browser.');
+    return;
+  }
+  function urlB64(b64) {
+    var pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    var s = (b64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+    var r = atob(s), o = new Uint8Array(r.length);
+    for (var i = 0; i < r.length; i++) o[i] = r.charCodeAt(i);
+    return o;
+  }
+  fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+    go.onclick = function () {
+      go.disabled = true;
+      msg('Requesting permission…');
+      Notification.requestPermission().then(function (perm) {
+        if (perm !== 'granted') {
+          msg('Permission was blocked. Allow notifications for this site in your browser settings, then try again.');
+          go.disabled = false;
+          return;
+        }
+        return navigator.serviceWorker.register('/sw.js').then(function (reg) {
+          return reg.pushManager.getSubscription().then(function (sub) {
+            return sub || reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(cfg.vapidPublicKey) });
+          });
+        }).then(function (sub) {
+          return fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sess.token },
+            body: JSON.stringify({ subscription: sub.toJSON(), room: room }),
+          });
+        }).then(function () {
+          msg('You\'re set! ✓ Close this tab — alerts will arrive even when the site is closed.', true);
+        });
+      }).catch(function (e) {
+        console.warn('[push]', e);
+        msg('Something went wrong. Try again.');
+        go.disabled = false;
+      });
+    };
+  }).catch(function () { msg('Could not reach the chat server. Check your connection and retry.'); });
+})();
+</script>
+</body>
+</html>

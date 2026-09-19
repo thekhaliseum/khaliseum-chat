@@ -92,8 +92,10 @@ your team. Team messages never appear in the public room.
 
 Your site runs on Ning, which can't host a Node server, so the chat backend
 lives on a small external host (free tier works) at `chat.thekhaliseum.com`,
-and embeds into your Ning pages. Push notifications work through the iframe
-embed below.
+and embeds into your Ning pages. Push enrollment happens from the embed:
+visitors tap "Turn on" and a one-time tab opens on the chat server to approve
+notifications (browsers block the permission prompt inside cross-origin
+iframes). After that, call-back blasts reach them even when your site is closed.
 
 **1. Host the chat server (Render, ~5 minutes, free)**
 - Push this `khaliseum-chat` folder to a GitHub repo (or I can walk you through it).
@@ -114,17 +116,17 @@ embed below.
 - Paste this where you want the chat (a page, sidebar, or site-wide footer):
 
 ```html
-<iframe src="https://chat.thekhaliseum.com/embed.html" allow="notifications"
+<iframe src="https://chat.thekhaliseum.com/embed.html"
         style="width:100%;height:600px;border:0;border-radius:12px"></iframe>
 ```
 
-`allow="notifications"` is what lets visitors opt into push notifications
-from inside the embed. Visitors tap "Turn on" once — then your call-back
-blasts reach them even when your site is closed.
+Visitors tap "Turn on" in the embed once — a new tab opens on the chat server
+where they approve notifications (browsers block the permission prompt inside
+cross-origin iframes). After that, your call-back blasts reach them even when
+your site is closed.
 
-**Alternative — bubble overlay instead of iframe:** paste this instead
-(chat works, but push won't on Ning since the service worker can't live on
-your Ning domain):
+**Alternative — floating bubble overlay instead of a fixed iframe:** paste
+this instead (chat works; the push opt-in opens the same enrollment tab):
 
 ```html
 <script src="https://chat.thekhaliseum.com/widget.js" data-title="The Khaliseum Chat" async></script>

@@ -1,13 +1,19 @@
 /* Khaliseum Chat widget — install with one script tag:
    <script src="https://YOUR-CHAT-SERVER/widget.js" data-room="community" async></script>
-   Optional attrs: data-title, data-sw (page-origin path to sw.js for cross-origin push)
+   Optional attrs: data-title, data-room, data-mode="embed" (full-viewport iframe mode),
+   data-sw (service worker path override)
 */
 (function () {
   'use strict';
   var script = document.currentScript;
   var SERVER = new URL(script.src).origin;
   var SAME_ORIGIN = location.origin === SERVER;
-  var SW_PATH = script.getAttribute('data-sw') || (SAME_ORIGIN ? SERVER + '/sw.js' : null);
+  var SW_PATH = script.getAttribute('data-sw') || (SERVER + '/sw.js');
+  // Cross-origin embeds (e.g. Ning iframe): most browsers block notification
+  // permission prompts inside cross-origin iframes, so push enrollment opens a
+  // top-level /push.html tab instead. Sessions live in the chat origin's
+  // localStorage, shared by the iframe and the enrollment page.
+  var CROSS_ORIGIN = !SAME_ORIGIN;
   var TITLE = script.getAttribute('data-title') || 'The Khaliseum Chat';
   var DEFAULT_ROOM = script.getAttribute('data-room') || 'community';
   var EMBED = script.getAttribute('data-mode') === 'embed'; // iframe/full-page mode: no bubble, panel fills viewport
@@ -116,10 +122,10 @@
     });
     panel.appendChild(tabs);
 
-    // push opt-in row
-    if (SW_PATH && state.pushState !== 'unsupported') {
+    // push opt-in row (always offered; cross-origin embeds enroll in a new tab)
+    if (state.pushState !== 'unsupported') {
       var prow = el('div', 'kx-pushrow', '<span>🔔 Get notified of new messages</span>');
-      var pbtn = el('button', null, state.pushState === 'on' ? 'On ✓' : 'Turn on');
+      var pbtn = el('button', null, state.pushState === 'on' ? 'On ✓' : (CROSS_ORIGIN ? 'Turn on ↗' : 'Turn on'));
       pbtn.disabled = state.pushState === 'on';
       pbtn.onclick = enablePush;
       prow.appendChild(pbtn);
@@ -251,16 +257,17 @@
 
   // ---- push ----
   function detectPush() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !SW_PATH) {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
       state.pushState = 'unsupported';
       return;
     }
+    if (CROSS_ORIGIN) { state.pushState = 'off'; return; } // enrollment + status live on /push.html
     navigator.serviceWorker.getRegistration().then(function (reg) {
       if (!reg) { state.pushState = 'off'; return; }
       return reg.pushManager.getSubscription().then(function (sub) {
         state.pushState = sub ? 'on' : 'off';
       });
-    }).catch(function () { state.pushState = 'unsupported'; });
+    }).catch(function () { state.pushState = 'off'; });
   }
 
   function urlBase64ToUint8Array(base64) {
@@ -274,6 +281,12 @@
   function enablePush() {
     var sess = state.sessions[state.activeRoom];
     if (!sess) return;
+    if (CROSS_ORIGIN) {
+      // Browsers block notification prompts in cross-origin iframes, so the
+      // enrollment page opens as a top-level tab at the chat origin.
+      window.open(SERVER + '/push.html?room=' + encodeURIComponent(state.activeRoom), '_blank');
+      return;
+    }
     Notification.requestPermission().then(function (perm) {
       if (perm !== 'granted') return;
       return navigator.serviceWorker.register(SW_PATH, { scope: SAME_ORIGIN ? '/' : undefined })
