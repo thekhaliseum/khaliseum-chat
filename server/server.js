@@ -3,9 +3,11 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const webpush = require('web-push');
+const multer = require('multer');
 const store = require('./db');
 
 const PORT = process.env.PORT || 3000;
@@ -68,7 +70,7 @@ const ip = (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req
 // ---- static files ----
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-app.get('/health', (req, res) => res.json({ ok: true, rooms: ROOMS.map((r) => r.id) }));
+app.get('/health', (req, res) => res.json({ ok: true, rooms: ROOMS.map((r) => r.id), version: process.env.RENDER_GIT_COMMIT || 'dev' }));
 
 app.get('/api/config', (req, res) => {
   res.json({ vapidPublicKey: vapid.publicKey, rooms: ROOMS });
@@ -123,6 +125,39 @@ app.post('/api/push/subscribe', authUser, (req, res) => {
 app.post('/api/push/unsubscribe', authUser, (req, res) => {
   const { endpoint } = req.body || {};
   if (endpoint) store.removePushSub(endpoint);
+  res.json({ ok: true });
+});
+
+// ---- image uploads (5MB max, images only) ----
+const uploadsDir = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'uploads');
+fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', express.static(uploadsDir, { maxAge: '7d', immutable: true }));
+const IMAGE_MIMES = {
+  'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+};
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: uploadsDir,
+    filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex') + (IMAGE_MIMES[file.mimetype] || '')),
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, !!IMAGE_MIMES[file.mimetype]),
+});
+app.post('/api/upload', authUser, (req, res) => {
+  upload.single('image')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'image too large (5MB max)' : 'upload failed' });
+    if (!req.file) return res.status(400).json({ error: 'no image received (jpeg/png/gif/webp only)' });
+    res.json({ ok: true, url: '/uploads/' + req.file.filename });
+  });
+});
+
+// users can delete their own messages (admins use the admin panel for any message)
+app.delete('/api/messages/:id', authUser, (req, res) => {
+  const msg = store.getMessage(req.params.id);
+  if (!msg || msg.deleted) return res.status(404).json({ error: 'not found' });
+  if (msg.user_id !== req.user.id) return res.status(403).json({ error: 'not your message' });
+  store.deleteMessage(msg.id);
+  broadcastToRoom(msg.room, { type: 'message_deleted', id: msg.id, room: msg.room });
   res.json({ ok: true });
 });
 
@@ -229,12 +264,15 @@ wss.on('connection', (ws, req) => {
         return ws.send(JSON.stringify({ type: 'error', error: 'slow down' }));
       }
       const body = String(msg.body || '').trim().slice(0, 1000);
-      if (!body) return;
+      // imageUrl must be a server-issued upload path — never trust anything else
+      const imageUrl = /^\/uploads\/[A-Za-z0-9]+\.(jpg|png|gif|webp)$/.test(String(msg.imageUrl || ''))
+        ? String(msg.imageUrl) : null;
+      if (!body && !imageUrl) return;
       const id = crypto.randomUUID();
-      store.addMessage(id, meta.room, meta.userId, meta.name, body);
-      const out = { type: 'message', id, room: meta.room, userId: meta.userId, name: meta.name, body, created_at: Date.now() };
+      store.addMessage(id, meta.room, meta.userId, meta.name, body, imageUrl);
+      const out = { type: 'message', id, room: meta.room, userId: meta.userId, name: meta.name, body, imageUrl, created_at: Date.now() };
       broadcastToRoom(meta.room, out);
-      notifyRoom(meta.room, meta.userId, meta.name, body);
+      notifyRoom(meta.room, meta.userId, meta.name, body, imageUrl);
     }
   });
 
@@ -242,13 +280,14 @@ wss.on('connection', (ws, req) => {
 });
 
 // push notify room subscribers (except the author)
-async function notifyRoom(room, excludeUserId, name, body) {
+async function notifyRoom(room, excludeUserId, name, body, imageUrl) {
   const subs = store.subsForRoom(room, excludeUserId);
   if (!subs.length) return;
   const r = roomById(room);
+  const preview = imageUrl && !body ? '📷 Photo' : (imageUrl ? '📷 ' + body : body);
   const payload = JSON.stringify({
     title: `💬 ${name} — ${r.name} | The Khaliseum`,
-    body: body.slice(0, 140),
+    body: preview.slice(0, 140),
     url: PUBLIC_URL || '/',
     tag: `khaliseum-${room}`,
   });

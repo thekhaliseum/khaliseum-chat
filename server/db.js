@@ -3,7 +3,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const dataDir = path.join(__dirname, '..', 'data');
+const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 fs.mkdirSync(dataDir, { recursive: true });
 const db = new Database(path.join(dataDir, 'chat.db'));
 db.pragma('journal_mode = WAL');
@@ -50,6 +50,12 @@ const set = (key, value) => {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
 };
 
+// ---- migrations ----
+const msgCols = db.prepare('PRAGMA table_info(messages)').all().map((c) => c.name);
+if (!msgCols.includes('image_url')) {
+  db.exec('ALTER TABLE messages ADD COLUMN image_url TEXT');
+}
+
 module.exports = {
   db, get, set,
 
@@ -69,25 +75,25 @@ module.exports = {
   listUsers: (limit = 100) =>
     db.prepare('SELECT id, name, role, banned, created_at FROM users ORDER BY created_at DESC LIMIT ?').all(limit),
 
-  addMessage: (id, room, userId, name, body) =>
-    db.prepare('INSERT INTO messages (id, room, user_id, name, body, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, room, userId, name, body, Date.now()),
+  addMessage: (id, room, userId, name, body, imageUrl = null) =>
+    db.prepare('INSERT INTO messages (id, room, user_id, name, body, image_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, room, userId, name, body, imageUrl, Date.now()),
 
   history: (room, limit = 50, before = null) => {
     if (before) {
-      return db.prepare(`SELECT id, room, user_id, name, body, created_at FROM messages
+      return db.prepare(`SELECT id, room, user_id, name, body, image_url, created_at FROM messages
         WHERE room = ? AND deleted = 0 AND created_at < ? ORDER BY created_at DESC LIMIT ?`).all(room, before, limit).reverse();
     }
-    return db.prepare(`SELECT id, room, user_id, name, body, created_at FROM messages
+    return db.prepare(`SELECT id, room, user_id, name, body, image_url, created_at FROM messages
       WHERE room = ? AND deleted = 0 ORDER BY created_at DESC LIMIT ?`).all(room, limit).reverse();
   },
 
   recentMessages: (limit = 100, room = null) => {
     if (room) {
-      return db.prepare(`SELECT id, room, user_id, name, body, created_at, deleted FROM messages
+      return db.prepare(`SELECT id, room, user_id, name, body, image_url, created_at, deleted FROM messages
         WHERE room = ? ORDER BY created_at DESC LIMIT ?`).all(room, limit).reverse();
     }
-    return db.prepare(`SELECT id, room, user_id, name, body, created_at, deleted FROM messages
+    return db.prepare(`SELECT id, room, user_id, name, body, image_url, created_at, deleted FROM messages
       ORDER BY created_at DESC LIMIT ?`).all(limit).reverse();
   },
 

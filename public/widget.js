@@ -14,6 +14,13 @@
   // top-level /push.html tab instead. Sessions live in the chat origin's
   // localStorage, shared by the iframe and the enrollment page.
   var CROSS_ORIGIN = !SAME_ORIGIN;
+  // Framed embeds (e.g. embed.html inside a Ning iframe): even when the widget
+  // document is same-origin with the chat server, browsers can block the
+  // notification permission prompt inside a frame — so enrollment opens a
+  // top-level /push.html tab instead.
+  var FRAMED = false;
+  try { FRAMED = window.self !== window.top; } catch (e) { FRAMED = true; }
+  var NEEDS_TOP_LEVEL = CROSS_ORIGIN || FRAMED;
   var TITLE = script.getAttribute('data-title') || 'The Khaliseum Chat';
   var DEFAULT_ROOM = script.getAttribute('data-room') || 'community';
   var EMBED = script.getAttribute('data-mode') === 'embed'; // iframe/full-page mode: no bubble, panel fills viewport
@@ -43,12 +50,18 @@
   .kx-pushrow button{background:#e8b33c;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;color:#111}
   .kx-pushrow button:disabled{opacity:.4;cursor:default}
   #kx-chat-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
-  .kx-msg{max-width:85%;padding:8px 11px;border-radius:12px;font-size:13.5px;line-height:1.4;word-wrap:break-word}
+  .kx-msg{max-width:85%;padding:8px 11px;border-radius:12px;font-size:13.5px;line-height:1.4;word-wrap:break-word;position:relative}
   .kx-msg .kx-n{font-size:11px;color:#e8b33c;font-weight:700;margin-bottom:2px}
   .kx-msg.them{background:#222224;align-self:flex-start;border-bottom-left-radius:4px}
   .kx-msg.me{background:#3a2f16;align-self:flex-end;border-bottom-right-radius:4px}
   .kx-msg.me .kx-n{color:#f5d67b}
   .kx-msg.deleted{opacity:.45;font-style:italic}
+  .kx-imgwrap{display:block;margin:4px 0}
+  .kx-msg img{max-width:100%;border-radius:8px;display:block;cursor:zoom-in}
+  .kx-del{position:absolute;top:2px;right:4px;background:none;border:none;color:#999;font-size:12px;cursor:pointer;opacity:.55;padding:4px}
+  .kx-del:hover{opacity:1;color:#e66}
+  .kx-attach{background:none;border:none;font-size:18px;cursor:pointer;padding:0 2px;color:#aaa}
+  .kx-attach:hover{color:#e8b33c}
   .kx-form{display:flex;border-top:1px solid #2a2a2c;padding:10px;gap:8px}
   .kx-form input{flex:1;background:#1c1c1e;border:1px solid #333;color:#eee;border-radius:9px;padding:10px;font-size:13.5px;outline:none}
   .kx-form button{background:#e8b33c;border:none;border-radius:9px;padding:0 16px;font-weight:700;cursor:pointer;color:#111}
@@ -125,7 +138,7 @@
     // push opt-in row (always offered; cross-origin embeds enroll in a new tab)
     if (state.pushState !== 'unsupported') {
       var prow = el('div', 'kx-pushrow', '<span>🔔 Get notified of new messages</span>');
-      var pbtn = el('button', null, state.pushState === 'on' ? 'On ✓' : (CROSS_ORIGIN ? 'Turn on ↗' : 'Turn on'));
+      var pbtn = el('button', null, state.pushState === 'on' ? 'On ✓' : (NEEDS_TOP_LEVEL ? 'Turn on ↗' : 'Turn on'));
       pbtn.disabled = state.pushState === 'on';
       pbtn.onclick = enablePush;
       prow.appendChild(pbtn);
@@ -164,9 +177,22 @@
     loadHistory(sess, msgs);
 
     var form = el('form', 'kx-form');
+    var attach = el('button', 'kx-attach', '📎');
+    attach.type = 'button';
+    attach.title = 'Attach a photo';
+    attach.setAttribute('aria-label', 'Attach a photo');
+    var fileI = document.createElement('input');
+    fileI.type = 'file';
+    fileI.accept = 'image/jpeg,image/png,image/gif,image/webp';
+    fileI.style.display = 'none';
+    attach.onclick = function () { fileI.click(); };
     var input = el('input'); input.placeholder = 'Message…'; input.maxLength = 1000; input.autocomplete = 'off';
+    fileI.onchange = function () {
+      if (fileI.files.length) uploadImage(sess, fileI.files[0], input);
+      fileI.value = '';
+    };
     var send = el('button', null, 'Send');
-    form.appendChild(input); form.appendChild(send);
+    form.appendChild(attach); form.appendChild(fileI); form.appendChild(input); form.appendChild(send);
     form.onsubmit = function (e) {
       e.preventDefault();
       var body = input.value.trim();
@@ -202,13 +228,74 @@
       .catch(function () { errEl.textContent = 'Connection failed.'; });
   }
 
-  function addMsg(msgsEl, m, animate) {
-    var wrap = el('div', 'kx-msg ' + (m.userId === (state.sessions[state.activeRoom] || {}).userId ? 'me' : 'them'));
+  function isOwn(m) {
+    var s = state.sessions[state.activeRoom] || {};
+    return !!(m.userId && s.userId && m.userId === s.userId);
+  }
+
+  var IMAGE_URL_RE = /^\/uploads\/[A-Za-z0-9]+\.(jpg|png|gif|webp)$/;
+
+  function addMsg(msgsEl, m) {
+    var wrap = el('div', 'kx-msg ' + (isOwn(m) ? 'me' : 'them'));
     wrap.dataset.msgId = m.id;
-    wrap.innerHTML = '<div class="kx-n">' + esc(m.name) + '</div><div class="kx-b">' + esc(m.body) + '</div>';
+    var n = el('div', 'kx-n'); n.textContent = m.name || '';
+    wrap.appendChild(n);
+    if (m.imageUrl && IMAGE_URL_RE.test(m.imageUrl)) {
+      var link = el('a', 'kx-imgwrap');
+      link.href = SERVER + m.imageUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      var img = document.createElement('img');
+      img.src = SERVER + m.imageUrl;
+      img.alt = 'photo';
+      img.loading = 'lazy';
+      link.appendChild(img);
+      wrap.appendChild(link);
+    }
+    if (m.body) {
+      var b = el('div', 'kx-b'); b.textContent = m.body;
+      wrap.appendChild(b);
+    }
+    if (isOwn(m)) {
+      var del = el('button', 'kx-del', '✕');
+      del.title = 'Delete this message';
+      del.setAttribute('aria-label', 'Delete message');
+      del.onclick = function (e) { e.stopPropagation(); deleteMessage(m.id); };
+      wrap.appendChild(del);
+    }
     msgsEl.appendChild(wrap);
     msgsEl.scrollTop = msgsEl.scrollHeight;
     return wrap;
+  }
+
+  function deleteMessage(id) {
+    var sess = state.sessions[state.activeRoom];
+    if (!sess) return;
+    if (!window.confirm('Delete this message for everyone?')) return;
+    fetch(SERVER + '/api/messages/' + encodeURIComponent(id), {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + sess.token },
+    }).catch(function () {});
+    // the message_deleted broadcast updates the UI for everyone
+  }
+
+  function uploadImage(sess, file, inputEl) {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { alert('Image must be under 5MB.'); return; }
+    var fd = new FormData();
+    fd.append('image', file);
+    fetch(SERVER + '/api/upload', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + sess.token },
+      body: fd,
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.j.url) { alert(res.j.error || 'Image upload failed.'); return; }
+        if (!state.ws || state.ws.readyState !== 1) { alert('Not connected — try again.'); return; }
+        state.ws.send(JSON.stringify({ type: 'chat', body: (inputEl.value || '').trim(), imageUrl: res.j.url }));
+        inputEl.value = '';
+      })
+      .catch(function () { alert('Image upload failed.'); });
   }
 
   function loadHistory(sess, msgsEl) {
@@ -233,7 +320,14 @@
         if (!open) { dot.style.display = 'block'; }
       } else if (d.type === 'message_deleted') {
         var n = msgsEl.querySelector('[data-msg-id="' + d.id + '"]');
-        if (n) { n.classList.add('deleted'); n.querySelector('.kx-b').textContent = 'Message removed by moderator.'; }
+        if (n) {
+          n.classList.add('deleted');
+          var oldBody = n.querySelector('.kx-b');
+          if (oldBody) oldBody.textContent = 'This message was removed.';
+          else { var rt = el('div', 'kx-b'); rt.textContent = 'This message was removed.'; n.appendChild(rt); }
+          var im = n.querySelector('.kx-imgwrap'); if (im) im.remove();
+          var db = n.querySelector('.kx-del'); if (db) db.remove();
+        }
       } else if (d.type === 'error') {
         console.warn('[khaliseum-chat]', d.error);
       }
@@ -261,7 +355,7 @@
       state.pushState = 'unsupported';
       return;
     }
-    if (CROSS_ORIGIN) { state.pushState = 'off'; return; } // enrollment + status live on /push.html
+    if (NEEDS_TOP_LEVEL) { state.pushState = 'off'; return; } // enrollment + status live on /push.html
     navigator.serviceWorker.getRegistration().then(function (reg) {
       if (!reg) { state.pushState = 'off'; return; }
       return reg.pushManager.getSubscription().then(function (sub) {
@@ -281,9 +375,10 @@
   function enablePush() {
     var sess = state.sessions[state.activeRoom];
     if (!sess) return;
-    if (CROSS_ORIGIN) {
-      // Browsers block notification prompts in cross-origin iframes, so the
-      // enrollment page opens as a top-level tab at the chat origin.
+    if (NEEDS_TOP_LEVEL) {
+      // Browsers block notification prompts in cross-origin iframes and often
+      // in framed documents, so the enrollment page opens as a top-level tab
+      // at the chat origin.
       window.open(SERVER + '/push.html?room=' + encodeURIComponent(state.activeRoom), '_blank');
       return;
     }

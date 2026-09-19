@@ -100,6 +100,71 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   check('team member reads team history', r.status === 200);
 
   ws1.close();
+
+  // 15. image upload (fresh users, since t3 was banned earlier — now unbanned, fine)
+  const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const pngBuf = Buffer.from(pngB64, 'base64');
+  async function upload(file, name, type, token) {
+    const fd = new FormData();
+    fd.append('image', new File([file], name, { type }));
+    const r = await fetch(BASE + '/api/upload', {
+      method: 'POST',
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+      body: fd,
+    });
+    const j = await r.json().catch(() => ({}));
+    return { status: r.status, j };
+  }
+  r = await upload(pngBuf, 'pic.png', 'image/png', t1.token);
+  check('image upload ok', r.status === 200 && /^\/uploads\/[A-Za-z0-9]+\.png$/.test(r.j.url), JSON.stringify(r.j));
+  const imgUrl = r.j.url;
+
+  // 16. non-image upload rejected
+  r = await upload(Buffer.from('hello'), 'evil.txt', 'text/plain', t1.token);
+  check('non-image upload rejected', r.status === 400);
+
+  // 17. unauthenticated upload rejected
+  r = await upload(pngBuf, 'pic.png', 'image/png', null);
+  check('upload requires auth', r.status === 401);
+
+  // 18. image message over WS: broadcast + history carry imageUrl
+  const wsA = new WebSocket(`ws://localhost:3100/ws?token=${t1.token}&room=community`);
+  await new Promise((res) => wsA.on('open', res));
+  const gotImg = new Promise((res) => wsA.on('message', (d) => { const p = JSON.parse(d); if (p.type === 'message') res(p); }));
+  wsA.send(JSON.stringify({ type: 'chat', body: 'look at this', imageUrl: imgUrl }));
+  const im = await gotImg;
+  check('image message broadcast', im.imageUrl === imgUrl && im.body === 'look at this');
+  const imgMsgId = im.id;
+  r = await api('GET', '/api/rooms/community/history', null, { Authorization: 'Bearer ' + t1.token });
+  check('history has imageUrl', r.j.messages.some((x) => x.id === imgMsgId && x.image_url === imgUrl));
+
+  // 19. spoofed imageUrl rejected (not a server upload path)
+  const gotSpoof = new Promise((res) => wsA.on('message', (d) => { const p = JSON.parse(d); if (p.type === 'message') res(p); }));
+  wsA.send(JSON.stringify({ type: 'chat', body: 'spoof attempt', imageUrl: 'https://evil.example/x.png' }));
+  const sp = await gotSpoof;
+  check('spoofed imageUrl stripped', sp.imageUrl === null && sp.body === 'spoof attempt');
+
+  // 20. user deletes own message
+  const delEv2 = new Promise((res) => wsA.on('message', (d) => { const p = JSON.parse(d); if (p.type === 'message_deleted') res(p); }));
+  r = await api('DELETE', `/api/messages/${imgMsgId}`, null, { Authorization: 'Bearer ' + t1.token });
+  check('own delete ok', r.status === 200 && r.j.ok);
+  const del2 = await delEv2;
+  check('own delete broadcast', del2.id === imgMsgId);
+  r = await api('GET', '/api/rooms/community/history', null, { Authorization: 'Bearer ' + t1.token });
+  check('own-deleted excluded from history', !r.j.messages.some((x) => x.id === imgMsgId));
+
+  // 21. cannot delete someone else's message (t1's new message, t3 tries)
+  const gotOther = new Promise((res) => wsA.on('message', (d) => { const p = JSON.parse(d); if (p.type === 'message') res(p); }));
+  wsA.send(JSON.stringify({ type: 'chat', body: 'not yours' }));
+  const other = await gotOther;
+  r = await api('DELETE', `/api/messages/${other.id}`, null, { Authorization: 'Bearer ' + t3.token });
+  check('delete other user message -> 403', r.status === 403);
+  r = await api('DELETE', `/api/messages/${other.id}`, null, {});
+  check('delete unauthenticated -> 401', r.status === 401);
+  r = await api('DELETE', '/api/messages/does-not-exist', null, { Authorization: 'Bearer ' + t1.token });
+  check('delete missing -> 404', r.status === 404);
+
+  wsA.close();
   console.log('\n--- results ---');
   results.forEach(([s, n, e]) => console.log(s, n, e));
   const fails = results.filter(([s]) => s === 'FAIL').length;
