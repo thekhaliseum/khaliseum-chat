@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Khaliseum — Demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0b0b0c; color: #eee; margin: 0; }
+  .hero { padding: 80px 24px; text-align: center; }
+  .hero h1 { font-size: 44px; margin: 0 0 10px; }
+  .hero h1 span { color: #e8b33c; }
+  .hero p { color: #999; font-size: 17px; }
+  .code { background: #161617; border: 1px solid #2a2a2c; border-radius: 10px; padding: 16px;
+          max-width: 640px; margin: 30px auto; font-family: monospace; font-size: 13px; color: #f5d67b;
+          text-align: left; overflow-x: auto; }
+</style>
+</head>
+<body>
+  <div class="hero">
+    <h1>The <span>Khaliseum</span></h1>
+    <p>This is a demo page. The chat bubble in the bottom-right is the embeddable messenger.<br>
+    Open this page in two tabs to watch messages sync in real time.</p>
+    <div class="code" id="snippet"></div>
+    <p style="font-size:13px">Admin / moderation panel: <a href="/admin.html" style="color:#e8b33c">/admin.html</a></p>
+  </div>
+
+  <!-- ★ THE INSTALL: one script tag. Point src at your chat server. ★ -->
+  <script src="/widget.js" data-title="The Khaliseum Chat" async></script>
+
+  <script>
+    // show the install snippet with the real origin filled in
+    document.getElementById('snippet').textContent =
+      '<script src="' + location.origin + '/widget.js"\n' +
+      '        data-title="The Khaliseum Chat"\n' +
+      '        async><\/script>';
+  </script>
+</body>
+</html>

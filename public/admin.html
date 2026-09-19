@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Khaliseum Chat — Admin</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f10; color: #eee; margin: 0; padding: 20px; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 22px; } h1 span { color: #e8b33c; }
+  .card { background: #161617; border: 1px solid #2a2a2c; border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+  input, select, textarea { background: #1c1c1e; border: 1px solid #333; color: #eee; border-radius: 8px; padding: 10px; font-size: 14px; width: 100%; margin-bottom: 10px; }
+  button { background: #e8b33c; border: none; border-radius: 8px; padding: 10px 16px; font-weight: 700; cursor: pointer; color: #111; font-size: 14px; }
+  button.danger { background: #c0392b; color: #fff; }
+  button.ghost { background: #2a2a2c; color: #eee; }
+  button.small { padding: 5px 10px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid #232324; vertical-align: top; }
+  th { color: #999; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  .deleted-row { opacity: .45; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+  .tabs button.ghost.active { background: #e8b33c; color: #111; }
+  .hidden { display: none; }
+  .err { color: #e36; font-size: 13px; margin-top: 8px; }
+  .ok { color: #5d5; font-size: 13px; margin-top: 8px; }
+  .hint { color: #888; font-size: 12.5px; }
+  .badge { display: inline-block; background: #2a2a2c; border-radius: 6px; padding: 2px 8px; font-size: 11.5px; color: #bbb; }
+  .badge.banned { background: #c0392b; color: #fff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>The <span>Khaliseum</span> Chat — Admin</h1>
+
+  <div class="card" id="login-card">
+    <h3>Sign in</h3>
+    <input type="password" id="pw" placeholder="Admin password">
+    <button onclick="login()">Sign in</button>
+    <div class="err" id="login-err"></div>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="tabs">
+      <button class="ghost active" onclick="showTab('messages', this)">💬 Messages</button>
+      <button class="ghost" onclick="showTab('users', this)">👥 Users</button>
+      <button class="ghost" onclick="showTab('blast', this)">📣 Call-back blast</button>
+    </div>
+
+    <div class="card" id="tab-messages">
+      <h3>Recent messages <span class="hint">— delete anything disruptive; it disappears for everyone instantly</span></h3>
+      <div style="margin-bottom:10px">
+        <select id="room-filter" onchange="loadMessages()" style="max-width:220px">
+          <option value="">All rooms</option>
+          <option value="community">Community</option>
+          <option value="team">Team 🔒</option>
+        </select>
+        <button class="ghost small" onclick="loadMessages()">↻ Refresh</button>
+      </div>
+      <table><thead><tr><th>Time</th><th>Room</th><th>From</th><th>Message</th><th></th></tr></thead>
+      <tbody id="msg-rows"></tbody></table>
+    </div>
+
+    <div class="card hidden" id="tab-users">
+      <h3>Users <span class="hint">— ban someone and they're cut off immediately</span></h3>
+      <button class="ghost small" onclick="loadUsers()">↻ Refresh</button>
+      <table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th></th></tr></thead>
+      <tbody id="user-rows"></tbody></table>
+    </div>
+
+    <div class="card hidden" id="tab-blast">
+      <h3>📣 Call-back blast</h3>
+      <p class="hint">Sends a push notification to everyone who opted in — use it to pull people back to your site or stream. Example: "We're LIVE on Kick right now 👇"</p>
+      <input id="blast-title" placeholder="Title — e.g. 🔴 LIVE NOW: The Khaliseum" maxlength="80">
+      <textarea id="blast-body" rows="3" placeholder="Message — e.g. Tap in, we're streaming on Kick right now: www.Kick.com/TheKhaliseum" maxlength="200"></textarea>
+      <input id="blast-url" placeholder="Link to open on tap — e.g. https://www.kick.com/thekhaliseum">
+      <select id="blast-room" style="max-width:260px">
+        <option value="">Everyone (all rooms)</option>
+        <option value="community">Community only</option>
+        <option value="team">Team only</option>
+      </select>
+      <button onclick="sendBlast()">Send blast</button>
+      <div class="ok" id="blast-ok"></div>
+      <div class="err" id="blast-err"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+var TOKEN = sessionStorage.getItem('kx_admin') || '';
+var API = '';
+
+function headers() { return { 'Content-Type': 'application/json', 'X-Admin-Token': TOKEN }; }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function time(ts) { return new Date(ts).toLocaleString(); }
+
+function login() {
+  var pw = document.getElementById('pw').value;
+  fetch(API + '/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) { document.getElementById('login-err').textContent = 'Wrong password.'; return; }
+      TOKEN = res.j.adminToken;
+      sessionStorage.setItem('kx_admin', TOKEN);
+      enter();
+    });
+}
+function enter() {
+  document.getElementById('login-card').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  loadMessages(); loadUsers();
+}
+if (TOKEN) enter();
+document.getElementById('pw').addEventListener('keydown', function (e) { if (e.key === 'Enter') login(); });
+
+function showTab(name, btn) {
+  ['messages', 'users', 'blast'].forEach(function (t) { document.getElementById('tab-' + t).classList.add('hidden'); });
+  document.getElementById('tab-' + name).classList.remove('hidden');
+  document.querySelectorAll('.tabs button').forEach(function (b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+}
+
+function loadMessages() {
+  var room = document.getElementById('room-filter').value;
+  fetch(API + '/api/admin/messages?limit=100' + (room ? '&room=' + room : ''), { headers: headers() })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      var tb = document.getElementById('msg-rows');
+      tb.innerHTML = '';
+      (j.messages || []).forEach(function (m) {
+        var tr = document.createElement('tr');
+        if (m.deleted) tr.className = 'deleted-row';
+        tr.innerHTML = '<td style="white-space:nowrap">' + time(m.created_at) + '</td>' +
+          '<td><span class="badge">' + esc(m.room) + '</span></td>' +
+          '<td><b>' + esc(m.name) + '</b></td>' +
+          '<td>' + esc(m.body) + (m.deleted ? ' <span class="badge">deleted</span>' : '') + '</td>' +
+          '<td>' + (m.deleted ? '' : '<button class="danger small" data-id="' + m.id + '">Delete</button>') + '</td>';
+        tb.appendChild(tr);
+      });
+      tb.querySelectorAll('button[data-id]').forEach(function (b) {
+        b.onclick = function () { delMsg(b.getAttribute('data-id')); };
+      });
+    });
+}
+
+function delMsg(id) {
+  if (!confirm('Delete this message for everyone?')) return;
+  fetch(API + '/api/admin/messages/' + id, { method: 'DELETE', headers: headers() })
+    .then(function () { loadMessages(); });
+}
+
+function loadUsers() {
+  fetch(API + '/api/admin/users', { headers: headers() })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      var tb = document.getElementById('user-rows');
+      tb.innerHTML = '';
+      (j.users || []).forEach(function (u) {
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td><b>' + esc(u.name) + '</b><br><span class="hint">' + time(u.created_at) + '</span></td>' +
+          '<td><span class="badge">' + esc(u.role) + '</span></td>' +
+          '<td>' + (u.banned ? '<span class="badge banned">banned</span>' : '<span class="badge">active</span>') + '</td>' +
+          '<td><button class="' + (u.banned ? 'ghost' : 'danger') + ' small" data-id="' + u.id + '" data-ban="' + (u.banned ? '0' : '1') + '">' +
+          (u.banned ? 'Unban' : 'Ban') + '</button></td>';
+        tb.appendChild(tr);
+      });
+      tb.querySelectorAll('button[data-id]').forEach(function (b) {
+        b.onclick = function () {
+          fetch(API + '/api/admin/ban', {
+            method: 'POST', headers: headers(),
+            body: JSON.stringify({ userId: b.getAttribute('data-id'), banned: b.getAttribute('data-ban') === '1' }),
+          }).then(function () { loadUsers(); });
+        };
+      });
+    });
+}
+
+function sendBlast() {
+  var title = document.getElementById('blast-title').value.trim();
+  var body = document.getElementById('blast-body').value.trim();
+  var url = document.getElementById('blast-url').value.trim();
+  var room = document.getElementById('blast-room').value || undefined;
+  document.getElementById('blast-err').textContent = '';
+  document.getElementById('blast-ok').textContent = '';
+  if (!title || !body) { document.getElementById('blast-err').textContent = 'Title and message are required.'; return; }
+  if (!confirm('Send this push blast now?')) return;
+  fetch(API + '/api/admin/broadcast', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({ title: title, body: body, url: url, room: room }),
+  }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) { document.getElementById('blast-err').textContent = res.j.error || 'Failed.'; return; }
+      document.getElementById('blast-ok').textContent = 'Blast sent to ' + res.j.sent + ' devices (' + res.j.failed + ' failed).';
+    });
+}
+</script>
+</body>
+</html>
